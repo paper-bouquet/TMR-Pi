@@ -128,7 +128,7 @@ void vote(const std::string& task_id) {
 void process_task(const std::string& task_id, const std::string& plaintext) {
     std::cout << "\n[任務啟動] ID: " << task_id << " | 內容: " << plaintext << std::endl;
 
-    std::string my_cipher = compute_aes(plaintext, master_key);
+    std::string my_cipher = compute_aes(plaintext, master_key, task_id);
 
     if (inject_fault.load()) {
         my_cipher += "_WRONG";
