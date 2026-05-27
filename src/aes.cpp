@@ -10,9 +10,13 @@
 
 // to lowercase hex string
 static std::string to_hex(const unsigned char* data, size_t len) {
-    std::string out(len * 2, '\0');
+    static const char kHex[] = "0123456789abcdef";
+    std::string out;
+    out.resize(len * 2);
     for (size_t i = 0; i < len; i++) {
-        snprintf(out.data() + i * 2, 3, "%02x", data[i]);
+        unsigned char b = data[i];
+        out[i * 2] = kHex[b >> 4];
+        out[i * 2 + 1] = kHex[b & 0x0F];
     }
     return out;
 }
