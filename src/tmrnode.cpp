@@ -165,14 +165,19 @@ void vote(const std::string& task_id) {
                 log("[防禦失敗] 排除被竄改資料後，其餘 2 個合法節點資料分歧，拒絕採信！\n");
         }
         
-        // 【情況四】：多個節點遭到變更/竄改
+        /// 【情況四】：多個節點遭到變更/竄改
         else if (tampered_count >= 2) {
             log("[嚴重攻擊中止] 偵測到多個節點(" + std::to_string(tampered_count) + "個)同時遭到竄改！系統遭受威脅，拒絕降級，終止本次投票！\n");
         }
         
-        // 【情況五】：1台斷線，同時又有1台被竄改
+        // 【修正新增：情況五】：兩台節點斷線 (孤島模式)
+        else if (missing_count >= 2) {
+            log("[嚴重失敗] 網路孤島狀態：失去與多數節點的連線 (缺失 " + std::to_string(missing_count) + " 台)，無法進行任何多數決！\n");
+        }
+        
+        // 【情況六】：1台斷線，同時又有1台被竄改
         else {
-            log("[嚴重錯誤] 同時發生「節點缺失」與「資料竄改」，剩餘合法節點不足，無法完成投票！\n");
+            log("[嚴重錯誤] 剩餘合法節點不足，無法完成交叉驗證與投票！\n");
         }
     }
     
@@ -194,19 +199,13 @@ void vote(const std::string& task_id) {
 
 // ================= Task Processing =================
 void process_task(const std::string& task_id, const std::string& plaintext) {
-    {
-        std::lock_guard<std::mutex> lock(log_mtx);
-        std::cout << "\n[任務啟動] ID: " << task_id << " | 內容: " << plaintext << std::endl;
-        if (log_file.is_open()) log_file << "\n[任務啟動] ID: " << task_id << " | 內容: " << plaintext << std::endl;
-    }
+    safe_log("\n[任務啟動] ID: " + task_id + " | 內容: " + plaintext + "\n");
 
     std::string text_to_encrypt = plaintext;
 
     if (inject_fault.load()) {
         text_to_encrypt += "_WRONG"; 
-        std::lock_guard<std::mutex> lock(log_mtx);
-        std::cout << "[警告] 模擬節點運算錯誤 (Fault)\n";
-        if (log_file.is_open()) log_file << "[警告] 模擬節點運算錯誤 (Fault)\n";
+        safe_log("[警告] 模擬節點運算錯誤 (Fault)\n");
     }
     std::string my_cipher = compute_aes(text_to_encrypt, master_key, task_id);
 
@@ -227,22 +226,19 @@ void process_task(const std::string& task_id, const std::string& plaintext) {
             return task.peer_results.size() >= peer_ips.size();
         });
 
-    {
-        std::lock_guard<std::mutex> log_lock(log_mtx);
-        if (!success) {
-            std::cout << "[逾時] 未收齊，降級投票\n";
-            if (log_file.is_open()) log_file << "[逾時] 未收齊，降級投票\n";
-        } else {
-            std::cout << "[收齊] 所有結果\n";
-            if (log_file.is_open()) log_file << "[收齊] 所有結果\n";
-        }
+    if (!success) {
+        safe_log("[逾時] 未收齊，降級投票\n");
+    } else {
+        safe_log("[收齊] 所有結果\n");
     }
 
     lock.unlock();
     vote(task_id);
+    
+    // 【嚴格修復 Memory Leak】任務完成後，將其從記憶體中剔除
     {
         std::lock_guard<std::mutex> g(mtx);
-        tasks[task_id].finished = true;
+        tasks.erase(task_id); 
     }
 }
 
@@ -326,7 +322,7 @@ void listener_thread() {
 
 int run_tmrnode(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "用法: ./TMR-Pi A/B/C\n";
+        std::cerr << "用法: ./TMR-Pi A/B/C\n"; 
         return 1;
     }
 
@@ -355,11 +351,7 @@ int run_tmrnode(int argc, char* argv[]) {
             peer_ips.push_back(n.second);
     }
 
-    {
-        std::lock_guard<std::mutex> lock(log_mtx);
-        std::cout << "啟動節點 " << my_id << std::endl;
-        if (log_file.is_open()) log_file << "啟動節點 " << my_id << std::endl;
-    }
+    safe_log("啟動節點 " + my_id + "\n");
 
     std::thread(listener_thread).detach();
     std::thread(heartbeat_thread).detach(); //啟動背景廣播
@@ -374,17 +366,7 @@ int run_tmrnode(int argc, char* argv[]) {
             inject_fault.store(!inject_fault.load());
             safe_log("fault: " + std::to_string(inject_fault.load()) + "\n");
         }
-        else if (!input.empty()) {
-            std::string task_id = gen_task_id();
 
-            {
-                std::lock_guard<std::mutex> lock(mtx);
-                tasks[task_id].plaintext = input;
-            }
-
-            broadcast("TASK:" + task_id + ":" + input);
-            std::thread(process_task, task_id, input).detach();
-        }
         else if (input == "status") {
             std::string output = "\n=== 節點狀態 ===\n";
             output += "本機 ID   : " + my_id + "\n";
@@ -423,6 +405,18 @@ int run_tmrnode(int argc, char* argv[]) {
             }
             output += "================\n";
             safe_log(output);
+        }
+
+        else if (!input.empty()) {
+            std::string task_id = gen_task_id();
+
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                tasks[task_id].plaintext = input;
+            }
+
+            broadcast("TASK:" + task_id + ":" + input);
+            std::thread(process_task, task_id, input).detach();
         }
     }
 }
