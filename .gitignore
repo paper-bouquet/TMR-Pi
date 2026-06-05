@@ -11,3 +11,4 @@ dist/
 *.exe
 
 target/
+*.log
