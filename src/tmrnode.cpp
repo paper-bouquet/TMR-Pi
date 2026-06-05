@@ -165,7 +165,7 @@ void vote(const std::string& task_id) {
                 log("[防禦失敗] 排除被竄改資料後，其餘 2 個合法節點資料分歧，拒絕採信！\n");
         }
         
-        /// 【情況四】：多個節點遭到變更/竄改
+        // 【情況四】：多個節點遭到變更/竄改
         else if (tampered_count >= 2) {
             log("[嚴重攻擊中止] 偵測到多個節點(" + std::to_string(tampered_count) + "個)同時遭到竄改！系統遭受威脅，拒絕降級，終止本次投票！\n");
         }
