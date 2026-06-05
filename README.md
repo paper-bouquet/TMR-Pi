@@ -44,16 +44,13 @@
 
 **軟體與技術棧 (Software Stack)**
 
-* 
-**程式語言**：C++17 (具備現代化多執行緒與記憶體安全特性) 
+* **程式語言**：C++17 (具備現代化多執行緒與記憶體安全特性) 
 
 
-* 
-**建置工具**：CMake (最低需求版本 v3.20.0) 
+* **建置工具**：CMake (最低需求版本 v3.20.0) 
 
 
-* 
-**密碼學核心**：OpenSSL v3.5.5 (提供 AES-256-CBC 加密與 HKDF 金鑰衍生) 
+* **密碼學核心**：OpenSSL v3.5.5 (提供 AES-256-CBC 加密與 HKDF 金鑰衍生) 
 
 
 * **並發控制**：POSIX Threads (`std::thread`, `std::mutex`, `std::condition_variable`)
