@@ -68,15 +68,33 @@ void vote(const std::string& task_id) {
     auto &task = tasks[task_id];
 
     std::map<std::string, int> counter;
+    
+    // 1. 先投自己一票
     counter[task.my_result]++;
 
+    // 2. 計算缺失數與竄改數
+    int missing_count = peer_ips.size() - task.peer_results.size(); //逾時缺失
+    int tampered_count = 0;                                         //遭到竄改
+
+    // 3. 檢查其他節點傳來的選票
     for (auto &p : task.peer_results) {
-        counter[p.second]++;
+        std::string node_id = p.first;
+        std::string full_cipher = p.second;
+
+        // 呼叫驗證函式檢查封包是否遭到竄改
+        if (verify_aes_hmac(full_cipher, master_key)) {
+            // 驗證成功：合法的選票
+            counter[full_cipher]++;
+        } else {
+            // 驗證失敗：HMAC 對不上，代表資料遭變更
+            tampered_count++;
+            std::cout << "偵測到來自節點 " << node_id << " 的封包遭到竄改！已強制剔除該票。\n";
+        }
     }
 
+    // 4. 找出最高票
     std::string winner;
     int max_count = 0;
-
     for (auto &c : counter) {
         if (c.second > max_count) {
             max_count = c.second;
@@ -84,38 +102,56 @@ void vote(const std::string& task_id) {
         }
     }
 
-    int expected_nodes = 1 + peer_ips.size();
-    int received_nodes = 1 + task.peer_results.size();
+    int expected_nodes = 1 + peer_ips.size(); // 預期要有 3 台
 
     std::cout << "\n=== Task " << task_id << " 投票結果 ===\n";
 
-    // TMR
     if (expected_nodes == 3) {
-        if (received_nodes == 3) {
+        
+        // 【情況一】：無斷線、無竄改
+        if (missing_count == 0 && tampered_count == 0) {
             if (max_count >= 2)
-                std::cout << "[成功] 3TMR 多數決 (" << max_count << "/3)\n";
+                std::cout << "[成功] 3TMR 多數決成功 (" << max_count << "/3)\n";
             else
-                std::cout << "[失敗] 3TMR 無法達成一致\n";
+                std::cout << "[失敗] 3TMR 投票分歧，無法達成一致\n";
         }
-        else if (received_nodes == 2) {
+        
+        // 【情況二】：單純的節點缺失 (1 台斷線/逾時，但沒人被竄改) -> 正常降級 2MR
+        else if (missing_count == 1 && tampered_count == 0) {
             if (max_count == 2)
-                std::cout << "[降級成功] 2MR 一致 (node 缺失)\n";
+                std::cout << "[降級成功] 2MR 一致 (因「節點缺失/網路斷線」啟動降級機制)\n";
             else
-                std::cout << "[降級失敗] 2MR 分歧\n";
+                std::cout << "[降級失敗] 2MR 分歧 (因「節點缺失/網路斷線」啟動降級機制)\n";
         }
+        
+        // 【情況三】：遭到惡意竄改 (只有 1 台被竄改)
+        else if (missing_count == 0 && tampered_count == 1) {
+            std::cout << "[資安防禦] 警告：偵測到 1 個節點遭受竄改攻擊！排除惡意資料，強制啟動 2MR 安全審查...\n";
+            if (max_count == 2)
+                std::cout << "[防禦成功] 排除被竄改資料後，其餘 2 個合法節點資料完全一致，安全通過！\n";
+            else
+                std::cout << "[防禦失敗] 排除被竄改資料後，其餘 2 個合法節點資料分歧，拒絕採信！\n";
+        }
+        
+        // 【情況四】：多個節點遭到變更/竄改
+        else if (tampered_count >= 2) {
+            std::cout << "[嚴重攻擊中止] 偵測到多個節點(" << tampered_count << "個)同時遭到竄改！系統遭受威脅，拒絕降級，終止本次投票！\n";
+        }
+        
+        // 【情況五】：1台斷線，同時又有1台被竄改
         else {
-            std::cout << "[失敗] 節點不足，無法投票\n";
+            std::cout << "[嚴重錯誤] 同時發生「節點缺失」與「資料竄改」，剩餘合法節點不足，無法完成投票！\n";
         }
     }
-
-    // DMR
+    
+    //  DMR 邏輯 
     else if (expected_nodes == 2) {
+        int received_nodes = 1 + task.peer_results.size() - tampered_count;
         if (received_nodes == 2 && max_count == 2)
             std::cout << "[成功] 2MR 一致\n";
         else
-            std::cout << "[失敗] 2MR 分歧或資料不足\n";
+            std::cout << "[失敗] 2MR 分歧、節點缺失或資料遭竄改\n";
     }
-
     else {
         std::cout << "[錯誤] 不支援的節點數\n";
     }
@@ -128,12 +164,13 @@ void vote(const std::string& task_id) {
 void process_task(const std::string& task_id, const std::string& plaintext) {
     std::cout << "\n[任務啟動] ID: " << task_id << " | 內容: " << plaintext << std::endl;
 
-    std::string my_cipher = compute_aes(plaintext, master_key, task_id);
+    std::string text_to_encrypt = plaintext;
 
     if (inject_fault.load()) {
-        my_cipher += "_WRONG";
-        std::cout << "[警告] 注入錯誤\n";
+        text_to_encrypt += "_WRONG"; 
+        std::cout << "[警告] 模擬節點運算錯誤 (Fault)\n";
     }
+    std::string my_cipher = compute_aes(text_to_encrypt, master_key, task_id);
 
     {
         std::lock_guard<std::mutex> lock(mtx);

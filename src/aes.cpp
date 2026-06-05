@@ -115,3 +115,45 @@ std::string compute_aes(const std::string& plaintext,
     return to_hex(ciphertext.data(), ciphertext_len) + ":" +
            to_hex(hmac_buf, hmac_len);
 }
+
+// 輔助函式：把 Hex 字串還原成 Byte 陣列
+static std::vector<unsigned char> hex_to_bytes(const std::string& hex) {
+    std::vector<unsigned char> bytes;
+    bytes.resize(hex.length() / 2);
+    for (size_t i = 0; i < bytes.size(); i++) {
+        unsigned int b;
+        sscanf(hex.c_str() + i * 2, "%02x", &b);
+        bytes[i] = static_cast<unsigned char>(b);
+    }
+    return bytes;
+}
+
+// 核心驗證函式：回傳 true 代表資料完好；false 代表被竄改過
+bool verify_aes_hmac(const std::string& cipher_with_hmac, const unsigned char* master_key) {
+    // 1. 尋找冒號，拆分密文與 HMAC
+    size_t colon_pos = cipher_with_hmac.find(':');
+    if (colon_pos == std::string::npos) return false;
+
+    std::string cipher_hex = cipher_with_hmac.substr(0, colon_pos);
+    std::string received_hmac_hex = cipher_with_hmac.substr(colon_pos + 1);
+
+    // 2. 衍生出同樣的 mac_key
+    unsigned char mac_key[32];
+    if (!derive_subkey(mac_key, master_key, "hmac-mac")) return false;
+
+    // 3. 將密文 Hex 還原成原始 Byte 進行 HMAC 計算
+    std::vector<unsigned char> ciphertext = hex_to_bytes(cipher_hex);
+
+    unsigned char hmac_buf[EVP_MAX_MD_SIZE];
+    unsigned int hmac_len = 0;
+    unsigned char* hmac_ret = HMAC(EVP_sha256(),
+         mac_key, 32,
+         ciphertext.data(), static_cast<int>(ciphertext.size()),
+         hmac_buf, &hmac_len);
+
+    if (!hmac_ret || hmac_len == 0) return false;
+
+    // 4. 比對計算出來的 HMAC 是否與收到的一致
+    std::string computed_hmac_hex = to_hex(hmac_buf, hmac_len);
+    return computed_hmac_hex == received_hmac_hex;
+}
